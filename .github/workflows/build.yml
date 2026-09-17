@@ -2,7 +2,8 @@ name: Build Questy
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -17,6 +18,7 @@ jobs:
             os: windows-latest
             asset: questy-windows.exe
             source: questy.exe
+
           - name: Linux
             os: ubuntu-latest
             asset: questy-linux
@@ -38,6 +40,7 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Build with PyInstaller
+        shell: bash
         run: |
           python -m PyInstaller \
             --onefile \
