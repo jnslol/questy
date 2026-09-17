@@ -7,18 +7,20 @@ on:
 
 jobs:
   build:
-    name: Build ${{ matrix.os }}
+    name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
 
     strategy:
       matrix:
         include:
-          - os: windows-latest
+          - name: Windows
+            os: windows-latest
             artifact: questy-windows
-            executable: questy.exe
-          - os: ubuntu-latest
+            archive: questy-windows.zip
+          - name: Linux
+            os: ubuntu-latest
             artifact: questy-linux
-            executable: questy
+            archive: questy-linux.tar.gz
 
     steps:
       - name: Checkout
@@ -27,29 +29,33 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Install dependencies
         shell: bash
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          python -m pip install nuitka
 
-      - name: Build with Nuitka
-        uses: Nuitka/Nuitka-Action@main
-        with:
-          nuitka-version: main
-          script-name: questy.py
-          mode: onefile
-          output-file: ${{ matrix.executable }}
-          include-package: modules
-          assume-yes-for-downloads: true
-          remove-output: true
-          windows-console-mode: force
+      - name: Build with cx_Freeze
+        run: python setup.py build_exe
+
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          7z a "dist/${{ matrix.archive }}" build/exe.*
+
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p dist
+          tar -czf "dist/${{ matrix.archive }}" -C build "$(find build -maxdepth 1 -type d -name 'exe.*' -printf '%f\n')"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.executable }}
+          path: dist/${{ matrix.archive }}
