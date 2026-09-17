@@ -1,0 +1,38 @@
+# Local credentials and runtime data
+accounts.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Nuitka and generated builds
+build/
+dist/
+*.egg-info/
+*.build/
+*.dist/
+*.onefile-build/
+*.exe
+*.pdb
+*.dll
+nuitka-crash-report.xml
+
+# Test and tooling caches
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+Desktop.ini
