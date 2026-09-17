@@ -1,0 +1,85 @@
+name: Build & Release Questy
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            asset: questy-windows.exe
+            nuitka-output: questy-windows.exe
+          - os: ubuntu-latest
+            asset: questy-linux
+            nuitka-output: questy-linux
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install nuitka
+
+      - name: Build with Nuitka
+        uses: Nuitka/Nuitka-Action@main
+        with:
+          nuitka-version: main
+          script-name: questy.py
+          mode: onefile
+          output-file: ${{ matrix.nuitka-output }}
+          include-package: modules
+          assume-yes-for-downloads: true
+          remove-output: true
+          windows-console-mode: force
+
+      - name: Rename Windows/Linux executable
+        shell: bash
+        run: |
+          mv "${{ matrix.nuitka-output }}" "${{ matrix.asset }}"
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download builds
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/questy-windows.exe
+            dist/questy-linux
