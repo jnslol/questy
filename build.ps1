@@ -3,8 +3,6 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $buildRoot = Join-Path $root "build"
 $dist = Join-Path $buildRoot "dist"
-$stamp = [DateTime]::Now.ToString("yyyyMMddHHmmss")
-$staging = Join-Path $buildRoot ("staging-" + $stamp)
 
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     throw "Python is required."
@@ -12,29 +10,27 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
 
 python -m pip install -r (Join-Path $root "requirements.txt")
 
-$nuitka = python -m nuitka --version 2>$null
+$pyinstaller = python -m PyInstaller --version 2>$null
+
 if ($LASTEXITCODE -ne 0) {
-    throw "Nuitka is not installed. Install it with: python -m pip install nuitka"
+    throw "PyInstaller is not installed. Install it with: python -m pip install pyinstaller"
 }
 
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
-New-Item -ItemType Directory -Force -Path $staging | Out-Null
 
-& python -m nuitka `
+& python -m PyInstaller `
     --onefile `
-    --standalone `
-    --remove-output `
-    --assume-yes-for-downloads `
-    --windows-console-mode=force `
-    --include-package=modules `
-    --output-dir=$staging `
-    --output-filename=questy.exe `
+    --name questy `
+    --distpath $dist `
+    --workpath (Join-Path $buildRoot "pyinstaller") `
+    --specpath $buildRoot `
+    --collect-all textual `
+    --collect-all rich `
+    --collect-submodules modules `
     (Join-Path $root "questy.py")
 
 if ($LASTEXITCODE -ne 0) {
-    throw "Nuitka build failed with exit code $LASTEXITCODE."
+    throw "PyInstaller build failed with exit code $LASTEXITCODE."
 }
 
-Copy-Item -LiteralPath (Join-Path $staging "questy.exe") -Destination (Join-Path $dist "questy.exe") -Force
-Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "Built: $dist\questy.exe"
