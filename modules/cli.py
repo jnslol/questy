@@ -127,31 +127,46 @@ def run_all_accounts(
     enable_rpc=True,
     enable_gateway=True,
     cancel_event=None,
+    account="all",
+    task_types=None,
+    statuses=None,
+    dry_run=False,
 ):
     if cancel_event is None:
         cancel_event = threading.Event()
+    selected_accounts = _select_accounts(accounts, account)
+    quest_filter = None
+    if task_types or statuses:
+        selected_statuses = statuses or ("actionable",)
+        selected_types = task_types or ()
+        quest_filter = lambda quest: matches_quest(quest, selected_statuses, selected_types)
     threads = []
     results = {}
     results_lock = threading.Lock()
-    for i, account in enumerate(accounts):
-        label = account.get("label") or f"account-{i}"
-        client = Client(account["token"], trace=log if trace else None)
+    for i, account_entry in enumerate(selected_accounts):
+        label = account_entry.get("label") or f"account-{i}"
+        client = Client(account_entry["token"], trace=log if trace else None)
 
         def worker(c=client, l=label):
-            runner, errors = run_account(
-                c,
-                l,
-                log,
-                cancel_event,
-                auto_enroll,
-                enable_rpc=enable_rpc,
-                enable_gateway=enable_gateway,
-            )
-            with results_lock:
-                results[l] = {
+            if dry_run:
+                account_result = _inspect_account(c, l, log, quest_filter)
+            else:
+                runner, errors = run_account(
+                    c,
+                    l,
+                    log,
+                    cancel_event,
+                    auto_enroll,
+                    enable_rpc=enable_rpc,
+                    enable_gateway=enable_gateway,
+                    quest_filter=quest_filter,
+                )
+                account_result = {
                     "errors": errors,
                     "statuses": dict(runner.results),
                 }
+            with results_lock:
+                results[l] = account_result
 
         thread = threading.Thread(
             target=worker,
@@ -167,6 +182,43 @@ def run_all_accounts(
             thread.join()
         raise
     return results
+
+
+def _select_accounts(accounts, selector):
+    if selector is None or selector == "all" or selector == "":
+        return list(accounts)
+    if isinstance(selector, str):
+        selector = [selector]
+    selected = []
+    for value in selector:
+        match = None
+        for index, account in enumerate(accounts):
+            label = account.get("label") or f"account-{index}"
+            if str(value) == str(index) or str(value) == label:
+                match = account
+                break
+        if match is None:
+            raise ValueError(f"unknown account selector: {value}")
+        if match not in selected:
+            selected.append(match)
+    return selected
+
+
+def _inspect_account(client, label, log, quest_filter):
+    try:
+        quests, excluded, blocked, suspended = parse_quests_response(client.get_quests())
+        if quest_filter:
+            quests = [quest for quest in quests if quest_filter(quest)]
+        log(f"[{label}] dry run: {len(quests)} quests selected ({len(excluded)} excluded)")
+        return {
+            "errors": [],
+            "statuses": {str(quest.id): quest_status(quest) for quest in quests},
+            "blocked_until": blocked,
+            "suspended_until": suspended,
+        }
+    except Exception as exc:
+        log(f"[{label}] dry run failed: {exc}")
+        return {"errors": [f"error: {exc}"], "statuses": {}}
 
 
 def cmd_tui(args):

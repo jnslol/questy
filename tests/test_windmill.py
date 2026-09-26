@@ -51,6 +51,23 @@ class TestWindmillSupport(unittest.TestCase):
         self.assertEqual(results["Main"]["statuses"], {"quest": "completed"})
         self.assertEqual(results["Secondary"]["errors"], ["error: unavailable"])
 
+    @mock.patch("modules.cli.run_account")
+    def test_run_all_accounts_can_select_one_account(self, run_account):
+        class FakeRunner:
+            results = {}
+
+        run_account.return_value = (FakeRunner(), [])
+        results = run_all_accounts(
+            [
+                {"label": "Main", "token": "token-1"},
+                {"label": "Secondary", "token": "token-2"},
+            ],
+            account="Secondary",
+            log=lambda message: None,
+        )
+        self.assertEqual(list(results), ["Secondary"])
+        self.assertEqual(run_account.call_args.args[1], "Secondary")
+
     @mock.patch("modules.notifications.requests.post")
     def test_webhook_payload_contains_summary(self, post):
         post.return_value.raise_for_status.return_value = None

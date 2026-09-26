@@ -11,17 +11,20 @@ from GitHub deployment.
 
 Create a schedule for `f/questy/run_all_accounts` with the desired interval.
 Use asynchronous execution and keep the concurrency limit at one so an
-all-account run cannot overlap another run.
+all-account run cannot overlap another run. Leave the inputs at their defaults
+for scheduled execution: `account=all`, actionable quests, RPC and Gateway
+enabled, and notifications enabled.
 
 Create an authenticated HTTP trigger for the same script if manual webhook
-execution is required. The webhook can pass `enable_rpc` and `enable_gateway`,
-but it must not accept account tokens.
+execution is required. Use it only as a trigger with an empty body; configure
+account selection, filters, toggles, dry-run mode, and notifications through
+the Windmill script input form.
 
 Deploy from a trusted machine with the Windmill CLI, or configure Windmill Git
 Sync to pull this repository. No GitHub-to-Windmill connection is required.
 Keep variables, secrets, and resources configured in Windmill itself.
 
-The deployment workflow runs `tools/prepare_windmill.py` before syncing. That
-copies the canonical modules into `f/questy/runtime/`, where Windmill supports
-Python relative imports. The generated runtime files are deployment artifacts
-and should not be edited manually.
+Run `python tools/prepare_windmill.py` before syncing. It embeds the canonical
+modules into the single tracked `f/questy/run_all_accounts.py` script. The
+generated script should not be edited manually; update `modules/` and rebuild
+it instead.

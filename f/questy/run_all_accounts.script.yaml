@@ -8,10 +8,43 @@ concurrency_limit: 1
 schema:
   type: object
   properties:
+    account:
+      type: string
+      default: all
+      description: all, an account label, or an account index
+    task_types:
+      type: array
+      items:
+        type: string
+        enum:
+          - WATCH_VIDEO
+          - WATCH_VIDEO_ON_MOBILE
+          - PLAY_ON_DESKTOP
+          - STREAM_ON_DESKTOP
+          - PLAY_ACTIVITY
+    statuses:
+      type: array
+      items:
+        type: string
+        enum:
+          - actionable
+          - completed
+          - expired
+          - unsupported
+          - all
+    auto_enroll:
+      type: boolean
+      default: true
     enable_rpc:
       type: boolean
       default: true
     enable_gateway:
+      type: boolean
+      default: true
+    dry_run:
+      type: boolean
+      default: false
+    notify:
       type: boolean
       default: true
   required: []

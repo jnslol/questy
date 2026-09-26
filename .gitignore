@@ -29,7 +29,6 @@ nuitka-crash-report.xml
 htmlcov/
 .mypy_cache/
 .ruff_cache/
-f/questy/runtime/
 
 # Editors and operating systems
 .idea/

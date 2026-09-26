@@ -28,7 +28,7 @@ class Cancelled(Exception):
 
 
 class Runner:
-    def __init__(self, client, account_label, log, cancel_event=None, auto_enroll=True, event=None, enable_rpc=False, enable_gateway=False, desktop_idle_limit=None):
+    def __init__(self, client, account_label, log, cancel_event=None, auto_enroll=True, event=None, enable_rpc=False, enable_gateway=False, desktop_idle_limit=None, quest_filter=None):
         self.client = client
         self.label = account_label
         self.log = log
@@ -40,6 +40,7 @@ class Runner:
         self.gateway = None
         self.rpc = None
         self.desktop_idle_limit = desktop_idle_limit
+        self.quest_filter = quest_filter
         self.desktop_lock = threading.Lock()
         self.results = {}
 
@@ -348,6 +349,8 @@ class Runner:
             raise Cancelled()
         data = self.client.get_quests()
         quests, excluded, blocked_until, suspended_until = parse_quests_response(data)
+        if self.quest_filter:
+            quests = [quest for quest in quests if self.quest_filter(quest)]
         if self._check_suspension(suspended_until):
             for quest in quests:
                 self.results[quest.id] = "skipped (suspended)"
@@ -403,7 +406,7 @@ class Runner:
             pass
 
 
-def run_account(client, account_label, log, cancel_event=None, auto_enroll=True, event=None, enable_rpc=False, enable_gateway=False, desktop_idle_limit=None):
+def run_account(client, account_label, log, cancel_event=None, auto_enroll=True, event=None, enable_rpc=False, enable_gateway=False, desktop_idle_limit=None, quest_filter=None):
     runner = Runner(
         client,
         account_label,
@@ -414,6 +417,7 @@ def run_account(client, account_label, log, cancel_event=None, auto_enroll=True,
         enable_rpc,
         enable_gateway,
         desktop_idle_limit,
+        quest_filter,
     )
     try:
         errors = runner.run()
