@@ -9,6 +9,10 @@ def load_accounts(path=ACCOUNTS_FILE):
         return []
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
+    return parse_accounts(data)
+
+
+def parse_accounts(data):
     accounts = []
     if isinstance(data, list):
         for item in data:

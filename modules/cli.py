@@ -101,16 +101,60 @@ def cmd_run(args):
     if not accounts:
         print(f"No accounts in {args.file}")
         sys.exit(1)
-    cancel_event = threading.Event()
+    try:
+        results = run_all_accounts(
+            accounts,
+            log=log,
+            trace=args.trace,
+            auto_enroll=not args.no_enroll,
+            enable_rpc=not args.no_rpc,
+            enable_gateway=not args.no_gateway,
+        )
+    except KeyboardInterrupt:
+        log("cancelled")
+        sys.exit(130)
+    failed = {label: result["errors"] for label, result in results.items() if result["errors"]}
+    if failed:
+        print(json.dumps(failed, indent=2))
+        sys.exit(1)
+
+
+def run_all_accounts(
+    accounts,
+    log=print,
+    trace=False,
+    auto_enroll=True,
+    enable_rpc=True,
+    enable_gateway=True,
+    cancel_event=None,
+):
+    if cancel_event is None:
+        cancel_event = threading.Event()
     threads = []
-    all_errors = {}
+    results = {}
+    results_lock = threading.Lock()
     for i, account in enumerate(accounts):
         label = account.get("label") or f"account-{i}"
-        client = Client(account["token"], trace=args.trace and log)
-        thread = threading.Thread(
-            target=lambda c=client, l=label: all_errors.update(
-                {l: run_account(c, l, log, cancel_event, not args.no_enroll, enable_rpc=not args.no_rpc, enable_gateway=not args.no_gateway)[1]}
+        client = Client(account["token"], trace=log if trace else None)
+
+        def worker(c=client, l=label):
+            runner, errors = run_account(
+                c,
+                l,
+                log,
+                cancel_event,
+                auto_enroll,
+                enable_rpc=enable_rpc,
+                enable_gateway=enable_gateway,
             )
+            with results_lock:
+                results[l] = {
+                    "errors": errors,
+                    "statuses": dict(runner.results),
+                }
+
+        thread = threading.Thread(
+            target=worker,
         )
         thread.start()
         threads.append(thread)
@@ -121,12 +165,8 @@ def cmd_run(args):
         cancel_event.set()
         for thread in threads:
             thread.join()
-        log("cancelled")
-        sys.exit(130)
-    failed = {label: errs for label, errs in all_errors.items() if errs}
-    if failed:
-        print(json.dumps(failed, indent=2))
-        sys.exit(1)
+        raise
+    return results
 
 
 def cmd_tui(args):

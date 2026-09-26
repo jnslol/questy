@@ -132,6 +132,24 @@ On Windows, you can build a single-file executable with:
 
 This creates a packaged binary under `build/dist/questy.exe`.
 
+## Windmill deployment
+
+The repository also contains a Windmill entrypoint at
+`f/questy/run_all_accounts.py`. It runs all configured accounts and
+sends one summary notification after the run.
+
+Create these secret variables in the Windmill workspace:
+
+- `f/questy/accounts` — the existing accounts JSON array
+- `f/questy/notification_webhook` — an outgoing webhook URL
+
+Create both a schedule and an authenticated HTTP trigger for the script. Keep
+the script concurrency limit at one to prevent overlapping all-account runs.
+
+Deployment can be done from a trusted machine with the Windmill CLI, or by
+configuring Windmill Git Sync to pull from this repository. GitHub does not
+need network access to your self-hosted Windmill instance.
+
 ## Notes
 
 - This project is designed to work with a configured account token and a matching backend service.

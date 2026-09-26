@@ -1,0 +1,8 @@
+# yaml-language-server: $schema=wmill.schema.json
+includes:
+  - "f/**"
+excludes: []
+skipVariables: true
+skipResources: true
+skipSecrets: true
+syncBehavior: v1

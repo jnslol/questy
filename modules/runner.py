@@ -188,11 +188,18 @@ class Runner:
         self._emit(quest, status="running", progress=progress, message="started")
         application_id = quest.application_id_for_task()
         if task_type == "PLAY_ON_DESKTOP" and self.enable_gateway and application_id:
-            if self.gateway is None:
-                self.gateway = GatewayPresence(self.client.token)
-                self.gateway.start(quest.application_name or quest.name, application_id)
-            else:
-                self.gateway.set_activity(quest.application_name or quest.name, application_id)
+            try:
+                if self.gateway is None:
+                    self.gateway = GatewayPresence(self.client.token)
+                    self.gateway.start(quest.application_name or quest.name, application_id)
+                else:
+                    self.gateway.set_activity(quest.application_name or quest.name, application_id)
+            except Exception as exc:
+                self.log(f"[{self.label}] Discord Gateway unavailable ({exc}); continuing without Gateway")
+                if self.gateway:
+                    self.gateway.close()
+                    self.gateway = None
+                self.enable_gateway = False
         if task_type == "PLAY_ON_DESKTOP" and self.enable_rpc and application_id:
             try:
                 if self.rpc is None:
@@ -204,6 +211,7 @@ class Runner:
                 if self.rpc:
                     self.rpc.close()
                     self.rpc = None
+                self.enable_rpc = False
         payload = {"application_id": application_id or "", "terminal": False}
         if task_type != "PLAY_ON_DESKTOP":
             payload["stream_key"] = self._ensure_stream_key(quest)

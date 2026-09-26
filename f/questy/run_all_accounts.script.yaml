@@ -1,0 +1,17 @@
+summary: Run Questy for all configured accounts
+description: Runs all accounts stored in f/questy/accounts and sends a summary to f/questy/notification_webhook.
+kind: script
+language: python3
+worker_group: default
+concurrency_key: questy-all-accounts
+concurrency_limit: 1
+schema:
+  type: object
+  properties:
+    enable_rpc:
+      type: boolean
+      default: true
+    enable_gateway:
+      type: boolean
+      default: true
+  required: []
