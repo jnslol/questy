@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import sys
 import unittest
 from unittest import mock
@@ -31,6 +32,11 @@ class TestWindmillSupport(unittest.TestCase):
             }
         )
         self.assertIn("Main: 1 completed, 1 active, 0 errors", summary)
+
+    def test_generated_script_has_flow_accounts_and_no_runtime_imports(self):
+        source = Path("f/questy/run_all_accounts.py").read_text(encoding="utf-8")
+        self.assertIn("accounts: list[dict]", source)
+        self.assertNotIn("from _questy_runtime", source)
 
     @mock.patch("modules.cli.run_account")
     def test_run_all_accounts_collects_each_account_result(self, run_account):

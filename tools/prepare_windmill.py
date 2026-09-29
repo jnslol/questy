@@ -45,6 +45,8 @@ def main():
 import json
 import sys
 import types
+import requests as _requests_dependency
+import websocket as _websocket_dependency
 
 
 _PACKAGE = "_questy_runtime"
@@ -67,9 +69,10 @@ def _load_module(name):
 for _module_name in {module_order!r}:
     _load_module(_module_name)
 
-from _questy_runtime.accounts import parse_accounts
-from _questy_runtime.cli_service import run_all_accounts
-from _questy_runtime.notifications import safe_json, send_webhook
+parse_accounts = sys.modules[f"{{_PACKAGE}}.accounts"].parse_accounts
+run_all_accounts = sys.modules[f"{{_PACKAGE}}.cli_service"].run_all_accounts
+safe_json = sys.modules[f"{{_PACKAGE}}.notifications"].safe_json
+send_webhook = sys.modules[f"{{_PACKAGE}}.notifications"].send_webhook
 
 
 def _get_variable(path):
@@ -78,17 +81,8 @@ def _get_variable(path):
     return wmill.get_variable(path)
 
 
-def _load_accounts():
-    value = _get_variable("f/questy/accounts")
-    if isinstance(value, str):
-        value = json.loads(value)
-    accounts = parse_accounts(value)
-    if not accounts:
-        raise ValueError("f/questy/accounts does not contain any accounts")
-    return accounts
-
-
 def main(
+    accounts: list[dict],
     account: str = "all",
     task_types: list[str] | None = None,
     statuses: list[str] | None = None,
@@ -105,7 +99,7 @@ def main(
 
     try:
         results = run_all_accounts(
-            _load_accounts(),
+            parse_accounts(accounts),
             log=print,
             auto_enroll=auto_enroll,
             enable_rpc=enable_rpc,

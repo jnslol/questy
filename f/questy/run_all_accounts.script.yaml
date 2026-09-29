@@ -1,5 +1,5 @@
 summary: Run Questy for all configured accounts
-description: Runs all accounts stored in f/questy/accounts and sends a summary to f/questy/notification_webhook.
+description: Runs the supplied accounts and optionally sends a summary to f/questy/notification_webhook.
 kind: script
 language: python3
 worker_group: default
@@ -8,6 +8,18 @@ concurrency_limit: 1
 schema:
   type: object
   properties:
+    accounts:
+      type: array
+      description: Account objects containing label and token values. Pass this from a flow input or the script form.
+      items:
+        type: object
+        properties:
+          label:
+            type: string
+          token:
+            type: string
+        required:
+          - token
     account:
       type: string
       default: all
@@ -47,4 +59,5 @@ schema:
     notify:
       type: boolean
       default: true
-  required: []
+  required:
+    - accounts
