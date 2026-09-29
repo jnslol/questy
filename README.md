@@ -71,12 +71,32 @@ If you run the app with no command, it opens the TUI automatically:
 python questy.py
 ```
 
+## Install / update the binary
+
+On Linux, download or update the prebuilt binary (shows current vs new
+version and hashes, skips when already up to date):
+
+```bash
+./install.sh
+./install.sh --check   # only compare, do not install
+./install.sh --force   # reinstall even if hashes match
+```
+
 ## Common commands
 
-List saved accounts:
+List saved accounts (`accounts list` also works):
 
 ```bash
 python questy.py accounts
+python questy.py accounts list
+```
+
+Add an account (token can come from `QUESTY_TOKEN` or stdin with `--token -`
+to keep it out of shell history):
+
+```bash
+python questy.py add --token YOUR_TOKEN --label "Main"
+QUESTY_TOKEN=YOUR_TOKEN python questy.py accounts add --label "Main" --no-validate
 ```
 
 Remove an account by index or label:
@@ -86,10 +106,17 @@ python questy.py remove 0
 python questy.py remove "Main"
 ```
 
-Filter quests by status and task type:
+Filter quests by status and task type, for one account:
 
 ```bash
 python questy.py quests --status actionable --status completed --type WATCH_VIDEO
+python questy.py quests --account "Main" --sort name
+```
+
+Dry-run a run for one account before executing:
+
+```bash
+python questy.py run --dry --account "Main"
 ```
 
 Disable optional features during automation:
@@ -98,7 +125,13 @@ Disable optional features during automation:
 python questy.py run --no-enroll --no-rpc --no-gateway
 ```
 
-Use a custom accounts file:
+Validate saved tokens and config:
+
+```bash
+python questy.py doctor
+```
+
+Use a custom accounts file (or set `QUESTY_ACCOUNTS_FILE`):
 
 ```bash
 python questy.py --file my_accounts.json accounts

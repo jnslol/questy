@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sys
 import threading
 
@@ -69,16 +70,33 @@ def cmd_accounts(args):
         print(f"{i}: {label} [{identity}] ({shown})")
 
 
+def _resolve_token(args):
+    token = getattr(args, "token", None)
+    if token == "-":
+        token = sys.stdin.read().strip()
+    if not token:
+        token = os.environ.get("QUESTY_TOKEN", "")
+    if not token:
+        print(
+            "error: no token provided "
+            "(use --token <TOKEN>, --token - to read from stdin, or set QUESTY_TOKEN)",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return token
+
+
 def cmd_add(args):
+    token = _resolve_token(args)
     if getattr(args, "no_validate", False):
-        created = add_account(args.token, args.label, path=args.file)
+        created = add_account(token, args.label, path=args.file)
         if created:
             print(f"account added: {args.label or 'unlabeled'} (unvalidated)")
         else:
             print("account already exists (label updated if given)")
         return
     try:
-        user = Client(args.token).get_me()
+        user = Client(token).get_me()
     except ApiError as exc:
         print(f"token validation failed: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -88,7 +106,7 @@ def cmd_add(args):
     username = user.get("username") if isinstance(user, dict) else None
     display_name = (user.get("global_name") or username) if isinstance(user, dict) else None
     try:
-        created = add_account(args.token, args.label, username, display_name, args.file)
+        created = add_account(token, args.label, username, display_name, args.file)
     except AccountsError as exc:
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -453,6 +471,49 @@ def _inspect_account(client, label, log, quest_filter):
         return {"errors": [f"error: {exc}"], "statuses": {}}
 
 
+def cmd_version(args):
+    from . import __version__
+
+    print(f"questy {__version__}")
+
+
+def cmd_doctor(args):
+    try:
+        accounts = load_accounts(args.file)
+    except AccountsError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    output = getattr(args, "format", "text") or "text"
+    if not accounts:
+        if output == "json":
+            print(json.dumps({"file": args.file, "accounts": []}, indent=2))
+        else:
+            print(f"No accounts in {args.file}. Add one: questy add --token <TOKEN>")
+        return
+    results = []
+    for i, account in enumerate(accounts):
+        label = account_label(account, i)
+        try:
+            user = Client(account.get("token", "")).get_me()
+            identity = None
+            if isinstance(user, dict):
+                identity = user.get("global_name") or user.get("username") or user.get("id")
+            results.append({"label": label, "ok": True, "identity": identity})
+        except Exception as exc:
+            results.append({"label": label, "ok": False, "error": str(exc)})
+    if output == "json":
+        print(json.dumps({"file": args.file, "accounts": results}, indent=2))
+    else:
+        print(f"accounts file: {args.file} ({len(accounts)} account(s))")
+        for entry in results:
+            if entry["ok"]:
+                print(f"{entry['label']}: OK ({entry['identity'] or 'unknown'})")
+            else:
+                print(f"{entry['label']}: FAILED ({entry['error']})")
+    if any(not entry["ok"] for entry in results):
+        sys.exit(1)
+
+
 def cmd_tui(args):
     from .tui import QuestyTui
 
@@ -474,6 +535,24 @@ def cmd_help(args, parser=None):
         parser.print_help()
 
 
+def _add_add_args(p):
+    p.add_argument(
+        "--token",
+        default=None,
+        help="account authorization token ('-' reads from stdin, or set QUESTY_TOKEN)",
+    )
+    p.add_argument("--label", help="friendly account label")
+    p.add_argument(
+        "--no-validate",
+        action="store_true",
+        help="skip token validation via users/@me",
+    )
+
+
+def _add_remove_args(p):
+    p.add_argument("target", nargs="+", help="index or label (repeatable)")
+
+
 def build_parser():
     from . import __version__
 
@@ -481,14 +560,20 @@ def build_parser():
         prog="questy",
         description="Multi-account quest automation client",
     )
-    parser.add_argument("--file", default=ACCOUNTS_FILE, help="accounts JSON file")
+    parser.add_argument(
+        "--file",
+        default=os.environ.get("QUESTY_ACCOUNTS_FILE", ACCOUNTS_FILE),
+        help="accounts JSON file (or set QUESTY_ACCOUNTS_FILE)",
+    )
     parser.add_argument(
         "-V", "--version", action="version", version=f"%(prog)s {__version__}"
     )
     sub = parser.add_subparsers(dest="command", required=True, metavar="command")
 
     p_accounts = sub.add_parser(
-        "accounts", aliases=["list-accounts"], help="list saved accounts"
+        "accounts",
+        aliases=["list-accounts"],
+        help="manage saved accounts (default: list)",
     )
     p_accounts.add_argument(
         "--format", choices=OUTPUT_FORMATS, default="text", help="output format"
@@ -497,19 +582,32 @@ def build_parser():
         "--show-token", action="store_true", help="show full tokens (default: masked)"
     )
     p_accounts.set_defaults(func=cmd_accounts)
+    acc_sub = p_accounts.add_subparsers(
+        dest="accounts_command", metavar="accounts-command"
+    )
+    p_acc_list = acc_sub.add_parser("list", help="list saved accounts")
+    p_acc_list.add_argument(
+        "--format", choices=OUTPUT_FORMATS, default="text", help="output format"
+    )
+    p_acc_list.add_argument(
+        "--show-token", action="store_true", help="show full tokens (default: masked)"
+    )
+    p_acc_list.set_defaults(func=cmd_accounts)
+    p_acc_add = acc_sub.add_parser("add", help="add an account by token")
+    _add_add_args(p_acc_add)
+    p_acc_add.set_defaults(func=cmd_add)
+    p_acc_remove = acc_sub.add_parser(
+        "remove", aliases=["rm"], help="remove account(s) by index or label"
+    )
+    _add_remove_args(p_acc_remove)
+    p_acc_remove.set_defaults(func=cmd_remove)
 
     p_add = sub.add_parser("add", help="add an account by token")
-    p_add.add_argument("--token", required=True, help="account authorization token")
-    p_add.add_argument("--label", help="friendly account label")
-    p_add.add_argument(
-        "--no-validate",
-        action="store_true",
-        help="skip token validation via users/@me",
-    )
+    _add_add_args(p_add)
     p_add.set_defaults(func=cmd_add)
 
     p_remove = sub.add_parser("remove", aliases=["rm"], help="remove account(s) by index or label")
-    p_remove.add_argument("target", nargs="+", help="index or label (repeatable)")
+    _add_remove_args(p_remove)
     p_remove.set_defaults(func=cmd_remove)
 
     p_list = sub.add_parser(
@@ -582,6 +680,7 @@ def build_parser():
     )
     p_run.add_argument(
         "--dry-run",
+        "--dry",
         action="store_true",
         help="list what would run without executing heartbeats",
     )
@@ -594,6 +693,17 @@ def build_parser():
     p_run.add_argument("--no-rpc", action="store_true", help="disable Discord desktop IPC activity registration")
     p_run.add_argument("--no-gateway", action="store_true", help="disable online game presence Gateway session")
     p_run.set_defaults(func=cmd_run)
+
+    p_version = sub.add_parser("version", help="print version and exit")
+    p_version.set_defaults(func=cmd_version)
+
+    p_doctor = sub.add_parser(
+        "doctor", help="validate saved account tokens and show config status"
+    )
+    p_doctor.add_argument(
+        "--format", choices=OUTPUT_FORMATS, default="text", help="output format"
+    )
+    p_doctor.set_defaults(func=cmd_doctor)
 
     p_tui = sub.add_parser("tui", help="launch the interactive TUI")
     p_tui.set_defaults(func=cmd_tui)

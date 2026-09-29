@@ -539,5 +539,134 @@ class TestApiRetry(unittest.TestCase):
         self.assertIn("games?game_ids=app%2Fid%201", request.call_args[0][1])
 
 
+class TestCliParser(unittest.TestCase):
+    def parse(self, argv):
+        from modules.cli import build_parser
+
+        return build_parser().parse_args(argv)
+
+    def test_bare_accounts_lists(self):
+        from modules.cli import cmd_accounts
+
+        self.assertIs(self.parse(["accounts"]).func, cmd_accounts)
+
+    def test_accounts_list_subcommand(self):
+        from modules.cli import cmd_accounts
+
+        args = self.parse(["accounts", "list", "--format", "json"])
+        self.assertIs(args.func, cmd_accounts)
+        self.assertEqual(args.format, "json")
+
+    def test_accounts_add_and_remove_subcommands(self):
+        from modules.cli import cmd_add, cmd_remove
+
+        args = self.parse(["accounts", "add", "--token", "t", "--label", "L"])
+        self.assertIs(args.func, cmd_add)
+        self.assertEqual(args.token, "t")
+        args = self.parse(["accounts", "remove", "L"])
+        self.assertIs(args.func, cmd_remove)
+        self.assertEqual(args.target, ["L"])
+
+    def test_run_dry_alias(self):
+        args = self.parse(["run", "--dry", "--account", "Main"])
+        self.assertTrue(args.dry_run)
+        self.assertEqual(args.account, ["Main"])
+        args = self.parse(["run", "--dry-run"])
+        self.assertTrue(args.dry_run)
+
+    def test_version_and_doctor_commands(self):
+        from modules.cli import cmd_doctor, cmd_version
+
+        self.assertIs(self.parse(["version"]).func, cmd_version)
+        self.assertIs(self.parse(["doctor"]).func, cmd_doctor)
+
+    def test_accounts_file_env_override(self):
+        import os
+
+        with mock.patch.dict(os.environ, {"QUESTY_ACCOUNTS_FILE": "env.json"}):
+            self.assertEqual(self.parse(["accounts"]).file, "env.json")
+        self.assertEqual(self.parse(["--file", "x.json", "accounts"]).file, "x.json")
+
+    def test_add_token_from_env_no_validate(self):
+        import io
+        import os
+        import tempfile
+
+        from modules.cli import cmd_add
+
+        tmp = tempfile.mktemp(suffix=".json")
+        self.addCleanup(lambda: os.path.exists(tmp) and os.remove(tmp))
+        with mock.patch.dict(os.environ, {"QUESTY_TOKEN": "env-token-123"}):
+            args = self.parse(["--file", tmp, "add", "--no-validate", "--label", "E"])
+            cmd_add(args)
+        from modules.accounts import load_accounts
+
+        accounts = load_accounts(tmp)
+        self.assertEqual(len(accounts), 1)
+        self.assertEqual(accounts[0]["token"], "env-token-123")
+
+    def test_add_token_from_stdin(self):
+        import io
+        import os
+        import tempfile
+
+        from modules.cli import cmd_add
+
+        tmp = tempfile.mktemp(suffix=".json")
+        self.addCleanup(lambda: os.path.exists(tmp) and os.remove(tmp))
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("QUESTY_TOKEN", None)
+            args = self.parse(["--file", tmp, "add", "--token", "-", "--label", "S", "--no-validate"])
+            with mock.patch.object(sys, "stdin", io.StringIO("stdin-token-456\n")):
+                cmd_add(args)
+        from modules.accounts import load_accounts
+
+        accounts = load_accounts(tmp)
+        self.assertEqual(accounts[0]["token"], "stdin-token-456")
+
+    def test_add_without_token_exits(self):
+        import os
+
+        from modules.cli import cmd_add
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("QUESTY_TOKEN", None)
+            args = self.parse(["--file", "nope.json", "add"])
+            with self.assertRaises(SystemExit) as ctx:
+                cmd_add(args)
+            self.assertEqual(ctx.exception.code, 2)
+
+    def test_doctor_reports_ok_and_failed(self):
+        import io
+        import os
+        import tempfile
+
+        from modules.accounts import save_accounts
+        from modules.cli import cmd_doctor
+
+        tmp = tempfile.mktemp(suffix=".json")
+        self.addCleanup(lambda: os.path.exists(tmp) and os.remove(tmp))
+        save_accounts(
+            [{"label": "Good", "token": "t1"}, {"label": "Bad", "token": "t2"}],
+            tmp,
+        )
+        args = self.parse(["--file", tmp, "doctor"])
+
+        def fake_get_me(self):
+            if self.token == "t1":
+                return {"username": "u1", "global_name": "User One", "id": "1"}
+            raise ApiError(401, "unauthorized")
+
+        with mock.patch.object(Client, "get_me", fake_get_me):
+            out = io.StringIO()
+            with mock.patch.object(sys, "stdout", out):
+                with self.assertRaises(SystemExit) as ctx:
+                    cmd_doctor(args)
+            self.assertEqual(ctx.exception.code, 1)
+            text = out.getvalue()
+        self.assertIn("Good: OK (User One)", text)
+        self.assertIn("Bad: FAILED", text)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -76,6 +76,13 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum questy-windows.exe questy-linux > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -84,3 +91,4 @@ jobs:
           files: |
             dist/questy-windows.exe
             dist/questy-linux
+            dist/SHA256SUMS
