@@ -91,15 +91,21 @@ fi
 echo "current:       $CURRENT_VERSION"
 echo "current sha256: $CURRENT_HASH"
 
+resolve_latest_tag() {
+    # Follow the /releases/latest redirect to learn the newest tag.
+    # This intentionally avoids api.github.com, whose unauthenticated
+    # quota (60 req/hr per IP) is easily exhausted on shared hosts.
+    local effective
+    effective="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+        "https://github.com/${REPO}/releases/latest" 2>/dev/null)" || return 1
+    printf '%s' "$effective" | sed 's#.*/releases/tag/##'
+}
+
 if [ -z "$TAG" ]; then
     echo "resolving latest release..."
-    if ! API_JSON="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")"; then
-        echo "error: could not reach the GitHub API for ${REPO}" >&2
-        exit 1
-    fi
-    TAG="$(printf '%s' "$API_JSON" | grep -o '"tag_name": *"[^"]*"' | head -n 1 | sed 's/.*": *"//; s/"//')"
-    if [ -z "$TAG" ]; then
-        echo "error: could not parse a release tag from the GitHub API response" >&2
+    if ! TAG="$(resolve_latest_tag)" || [ -z "$TAG" ] || [ "$TAG" = "latest" ]; then
+        echo "error: could not resolve the latest release for ${REPO}" >&2
+        echo "  check your network connection, or pin a version: $0 --tag v1.0.5" >&2
         exit 1
     fi
 fi
