@@ -2,7 +2,6 @@ import random
 import threading
 import time
 import traceback
-import time
 
 from .api import ApiError
 from .gateway import GatewayPresence
@@ -18,9 +17,14 @@ HEARTBEAT_INTERVALS = {
 }
 DEFAULT_HEARTBEAT_INTERVAL = (20.0, 22.0)
 MAX_NO_PROGRESS_BEATS = 5
+# Bound PLAY_ON_DESKTOP stalls so the quest-level retry can trigger.
+# A per-account desktop_idle_limit still wins when explicitly configured.
+DEFAULT_DESKTOP_NO_PROGRESS_LIMIT = 15
 POST_ENROLL_SLEEP = (0.8, 1.5)
 QUEST_STAGGER = (1.5, 4.0)
 SKIPPABLE_STATUS = {403, 404, 410}
+MAX_QUEST_ATTEMPTS = 3
+RETRY_BACKOFF = (2.0, 4.0)
 
 
 class Cancelled(Exception):
@@ -223,12 +227,15 @@ class Runner:
 
         no_progress = 0
         no_progress_limit = MAX_NO_PROGRESS_BEATS
+        desktop_no_progress_limit = (
+            self.desktop_idle_limit
+            if self.desktop_idle_limit is not None
+            else DEFAULT_DESKTOP_NO_PROGRESS_LIMIT
+        )
         max_beats = int(target / min(interval)) * 3 + 10
-        if task_type == "PLAY_ON_DESKTOP":
-            max_beats = None
         beats = 0
         try:
-            while progress < target and (max_beats is None or beats < max_beats):
+            while progress < target and beats < max_beats:
                 self._sleep(random.uniform(*interval))
                 beats += 1
                 response = self.client.heartbeat(quest.id, payload)
@@ -246,11 +253,7 @@ class Runner:
                     no_progress = 0
                 else:
                     no_progress += 1
-                    if (
-                        task_type == "PLAY_ON_DESKTOP"
-                        and self.desktop_idle_limit is not None
-                        and no_progress >= self.desktop_idle_limit
-                    ):
+                    if task_type == "PLAY_ON_DESKTOP" and no_progress >= desktop_no_progress_limit:
                         self.log(f"[{self.label}] {quest.name}: active, awaiting Discord game credit")
                         self._emit(quest, status="active", progress=progress, message="awaiting game credit")
                         return "active"
@@ -296,53 +299,122 @@ class Runner:
             self.gateway.close()
             self.gateway = None
 
+    def _refresh_quest(self, quest):
+        """Refetch fresh quest state so retries don't reuse stale progress."""
+        try:
+            quests, _, _, _ = parse_quests_response(self.client.get_quests())
+            fresh = next((item for item in quests if str(item.id) == str(quest.id)), None)
+            return fresh if fresh is not None else quest
+        except Exception:
+            return quest
+
+    def _attempt_once(self, quest):
+        """Run a single attempt. Returns 'completed', 'skipped*', or 'active'.
+
+        Raises Cancelled, ApiError, or unexpected Exception on failure so the
+        caller can retry. Skipped/unsupported outcomes are terminal and are
+        stored directly.
+        """
+        if quest.is_completed():
+            self.results[quest.id] = "skipped"
+            self._emit(quest, status="completed", progress=quest.target(), message="already completed")
+            return "skipped"
+        if quest.is_expired():
+            self.results[quest.id] = "skipped"
+            self._emit(quest, status="expired", message="expired")
+            return "skipped"
+        if not quest.is_actionable():
+            self.results[quest.id] = "skipped"
+            self._emit(quest, status="unsupported", message="unsupported")
+            return "skipped"
+        try:
+            self._enroll(quest)
+        except ApiError as exc:
+            if exc.status in SKIPPABLE_STATUS:
+                self.results[quest.id] = "skipped (unavailable)"
+                self._emit(quest, status="unavailable", message=f"not available ({exc.status})")
+                return "skipped (unavailable)"
+            raise
+        task_type = quest.task_type()
+        if task_type in ("WATCH_VIDEO", "WATCH_VIDEO_ON_MOBILE"):
+            execution_status = self._run_video(quest)
+        else:
+            execution_status = self._run_heartbeat(quest)
+        if execution_status == "active":
+            return "active"
+        self.results[quest.id] = "completed"
+        self._emit(quest, status="completed", progress=quest.target(), message="completed")
+        return "completed"
+
     def run_quest(self, quest):
         try:
             self._sleep(random.uniform(*QUEST_STAGGER))
-            if quest.is_completed():
-                self.results[quest.id] = "skipped"
-                self._emit(quest, status="completed", progress=quest.target(), message="already completed")
-                return
-            if quest.is_expired():
-                self.results[quest.id] = "skipped"
-                self._emit(quest, status="expired", message="expired")
-                return
-            if not quest.is_actionable():
-                self.results[quest.id] = "skipped"
-                self._emit(quest, status="unsupported", message="unsupported")
-                return
-            try:
-                self._enroll(quest)
-            except ApiError as exc:
-                if exc.status in SKIPPABLE_STATUS:
-                    self.results[quest.id] = "skipped (unavailable)"
-                    self._emit(quest, status="unavailable", message=f"not available ({exc.status})")
-                    return
-                raise
-            task_type = quest.task_type()
-            if task_type in ("WATCH_VIDEO", "WATCH_VIDEO_ON_MOBILE"):
-                execution_status = self._run_video(quest)
-            else:
-                execution_status = self._run_heartbeat(quest)
-            if execution_status == "active":
-                self.results[quest.id] = "active"
-                self._emit(quest, status="active", progress=quest.local_progress(), message="active")
-                return
-            status = "completed"
-            self.results[quest.id] = status
-            self._emit(quest, status=status, progress=quest.target(), message=status)
         except Cancelled:
             self.results[quest.id] = "cancelled"
             raise
-        except ApiError as exc:
-            if "captcha_key" in exc.body:
-                self.results[quest.id] = "error: captcha required"
-                self.log(f"[{self.label}] {quest.name}: ERROR captcha required (solve manually in the client)")
-                self._emit(quest, status="error", message="captcha required")
-            else:
-                self.results[quest.id] = f"error: {exc}"
-                self.log(f"[{self.label}] {quest.name}: ERROR {exc}")
-                self._emit(quest, status="error", message=str(exc))
+        current = quest
+        last_reason = "unknown failure"
+        for attempt in range(1, MAX_QUEST_ATTEMPTS + 1):
+            if attempt > 1:
+                try:
+                    self._sleep(random.uniform(*RETRY_BACKOFF))
+                except Cancelled:
+                    self.results[current.id] = "cancelled"
+                    raise
+                current = self._refresh_quest(current)
+                if current.is_completed():
+                    self.results[current.id] = "skipped"
+                    self._emit(current, status="completed", progress=current.target(), message="already completed")
+                    return
+                self.log(f"[{self.label}] {current.name}: retrying after failure ({last_reason}) (attempt {attempt}/{MAX_QUEST_ATTEMPTS})")
+            try:
+                outcome = self._attempt_once(current)
+                if outcome in ("completed", "skipped", "skipped (unavailable)"):
+                    return
+                # "active" means Discord has not credited completion yet.
+                last_reason = "awaiting Discord completion/credit"
+                if attempt < MAX_QUEST_ATTEMPTS:
+                    self.log(f"[{self.label}] {current.name}: attempt {attempt}/{MAX_QUEST_ATTEMPTS} failed ({last_reason}), retrying...")
+                    self._emit(current, status="active", progress=current.local_progress(), message=f"attempt {attempt}/{MAX_QUEST_ATTEMPTS} failed, retrying")
+                    continue
+                final = f"error: failed after {MAX_QUEST_ATTEMPTS} attempts: {last_reason}"
+                self.results[current.id] = final
+                self.log(f"[{self.label}] {current.name}: giving up after {MAX_QUEST_ATTEMPTS} attempts ({last_reason})")
+                self._emit(current, status="error", message=final)
+                return
+            except Cancelled:
+                self.results[current.id] = "cancelled"
+                raise
+            except ApiError as exc:
+                if exc.status in SKIPPABLE_STATUS:
+                    self.results[current.id] = "skipped (unavailable)"
+                    self._emit(current, status="unavailable", message=f"not available ({exc.status})")
+                    return
+                if "captcha_key" in (exc.body or ""):
+                    last_reason = "captcha required (solve manually in the client)"
+                else:
+                    last_reason = str(exc)
+                if attempt < MAX_QUEST_ATTEMPTS:
+                    self.log(f"[{self.label}] {current.name}: attempt {attempt}/{MAX_QUEST_ATTEMPTS} failed ({last_reason}), retrying...")
+                    self._emit(current, status="error", message=f"attempt {attempt}/{MAX_QUEST_ATTEMPTS} failed, retrying: {last_reason}")
+                    continue
+                final = f"error: failed after {MAX_QUEST_ATTEMPTS} attempts: {last_reason}"
+                self.results[current.id] = final
+                self.log(f"[{self.label}] {current.name}: giving up after {MAX_QUEST_ATTEMPTS} attempts ({last_reason})")
+                self._emit(current, status="error", message=final)
+                return
+            except Exception as exc:
+                last_reason = f"{type(exc).__name__}: {exc}"
+                if attempt < MAX_QUEST_ATTEMPTS:
+                    self.log(f"[{self.label}] {current.name}: attempt {attempt}/{MAX_QUEST_ATTEMPTS} failed ({last_reason}), retrying...")
+                    self._emit(current, status="error", message=f"attempt {attempt}/{MAX_QUEST_ATTEMPTS} failed, retrying: {last_reason}")
+                    continue
+                detail = f"{last_reason}\n{traceback.format_exc()}"
+                final = f"error: failed after {MAX_QUEST_ATTEMPTS} attempts: {last_reason}"
+                self.results[current.id] = final
+                self.log(f"[{self.label}] {current.name}: giving up after {MAX_QUEST_ATTEMPTS} attempts ({last_reason})\n{traceback.format_exc().rstrip()}")
+                self._emit(current, status="error", message=final)
+                return
 
     def run(self):
         if self.cancel_event.is_set():
@@ -369,6 +441,14 @@ class Runner:
             thread.join()
         for quest in quests:
             status = self.results.get(quest.id, "not run")
+            if status == "not run":
+                # A worker thread died without recording a result; surface it
+                # as a retried failure instead of silently reporting 0/N.
+                message = f"error: failed after {MAX_QUEST_ATTEMPTS} attempts: worker did not finish"
+                self.results[quest.id] = message
+                self.log(f"[{self.label}] {quest.name}: giving up after {MAX_QUEST_ATTEMPTS} attempts (worker did not finish)")
+                self._emit(quest, status="error", message=message)
+                status = message
             if str(status).startswith("error"):
                 errors.append(quest.id)
         return errors

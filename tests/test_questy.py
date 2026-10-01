@@ -291,6 +291,7 @@ class TestRunner(unittest.TestCase):
             mock.patch("modules.runner.VIDEO_SLEEP", (0.05, 0.05)),
             mock.patch("modules.runner.POST_ENROLL_SLEEP", (0.0, 0.0)),
             mock.patch("modules.runner.QUEST_STAGGER", (0.0, 0.0)),
+            mock.patch("modules.runner.RETRY_BACKOFF", (0.0, 0.0)),
         ]
         for patch in self._patches:
             patch.start()
@@ -371,11 +372,15 @@ class TestRunner(unittest.TestCase):
             else {},
             __name__="heartbeat",
         )
-        runner = Runner(client, "test", lambda m: None, desktop_idle_limit=1)
+        logs = []
+        runner = Runner(client, "test", logs.append, desktop_idle_limit=1)
         errors = runner.run()
-        self.assertEqual(runner.results["q-play"], "active")
+        self.assertTrue(runner.results["q-play"].startswith("error: failed after 3 attempts"))
+        self.assertIn("q-play", errors)
+        self.assertTrue(any("attempt 1/3 failed" in m for m in logs))
+        self.assertTrue(any("giving up after 3 attempts" in m for m in logs))
 
-    def test_target_progress_without_server_completion_stays_active(self):
+    def test_target_progress_without_server_completion_retries_then_gives_up(self):
         client = MockClient()
         client.heartbeat = mock.Mock(
             side_effect=lambda qid, payload: {
@@ -386,9 +391,66 @@ class TestRunner(unittest.TestCase):
             else {},
             __name__="heartbeat",
         )
+        logs = []
+        runner = Runner(client, "test", logs.append)
+        errors = runner.run()
+        self.assertTrue(runner.results["q-play"].startswith("error: failed after 3 attempts"))
+        self.assertIn("q-play", errors)
+        self.assertTrue(any("attempt 1/3 failed" in m for m in logs))
+        self.assertTrue(any("giving up after 3 attempts" in m for m in logs))
+
+    def test_flaky_video_retries_then_succeeds(self):
+        client = MockClient()
+        calls = {"n": 0}
+        real_video = client.video_progress
+
+        def flaky(quest_id, timestamp):
+            if quest_id == "q-video":
+                calls["n"] += 1
+                if calls["n"] <= 2:
+                    raise ApiError(500, "server error")
+            return real_video(quest_id, timestamp)
+
+        client.video_progress = mock.Mock(side_effect=flaky, __name__="video_progress")
+        logs = []
+        runner = Runner(client, "test", logs.append)
+        errors = runner.run()
+        self.assertEqual(runner.results["q-video"], "completed")
+        self.assertNotIn("q-video", errors)
+        self.assertGreaterEqual(calls["n"], 3)
+        self.assertTrue(any("attempt 1/3 failed" in m for m in logs))
+
+    def test_unexpected_exception_retries_three_times(self):
+        client = MockClient()
+        client.video_progress = mock.Mock(
+            side_effect=RuntimeError("boom"), __name__="video_progress"
+        )
+        logs = []
+        runner = Runner(client, "test", logs.append)
+        errors = runner.run()
+        self.assertTrue(runner.results["q-video"].startswith("error: failed after 3 attempts"))
+        self.assertIn("q-video", errors)
+        self.assertEqual(client.video_progress.call_count, 3)
+        self.assertTrue(any("giving up after 3 attempts" in m for m in logs))
+
+    def test_retry_refetches_quest_state(self):
+        client = MockClient()
+        get_calls = {"n": 0}
+        real_get = client.get_quests
+
+        def counting_get():
+            get_calls["n"] += 1
+            return real_get()
+
+        client.get_quests = counting_get
+        client.video_progress = mock.Mock(
+            side_effect=ApiError(500, "server error"), __name__="video_progress"
+        )
         runner = Runner(client, "test", lambda m: None)
         runner.run()
-        self.assertEqual(runner.results["q-play"], "active")
+        # initial fetch + terminal-confirm fetches + refetches between attempts
+        self.assertGreaterEqual(get_calls["n"], 3)
+        self.assertTrue(runner.results["q-video"].startswith("error: failed after 3 attempts"))
 
     def test_suspension_stops_runner(self):
         client = MockClient()
